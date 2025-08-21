@@ -1,0 +1,32 @@
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    # pas besoin d'exposer 11434 publiquement; Open WebUI y accède via le réseau docker
+    # décommentez la ligne suivante si vous voulez tester l'API depuis l'hôte:
+    # ports:
+    #   - "127.0.0.1:11434:11434"
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    depends_on:
+      - ollama
+    restart: unless-stopped
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      # Active la page de connexion (compte admin créé au premier accès)
+      - WEBUI_AUTH=True
+    ports:
+      - "127.0.0.1:3000:8080"  # IHM dispo sur http://localhost:3000
+    volumes:
+      - openwebui:/app/backend/data
+
+volumes:
+  ollama:
+  openwebui:
+
