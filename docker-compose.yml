@@ -25,6 +25,11 @@ services:
       - "127.0.0.1:3000:8080"  # IHM dispo sur http://localhost:3000
     volumes:
       - openwebui:/app/backend/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 volumes:
   ollama:

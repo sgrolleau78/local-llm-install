@@ -15,7 +15,7 @@ sudo apt-get update
 echo "********************************************************"
 echo ">>> Step [2] Installation ou mise à jour des paquets ca-certificates, curl, gnupg"
 
-sudo apt-get install -y ca-certificates curl gnupg
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg
 
 # Création du répertoire des clés GPG
 # /etc/apt/keyrings : dossier standard pour stocker les clés GPG
@@ -54,16 +54,22 @@ sudo apt-get update
 echo "********************************************************"
 echo ">>> Step [7] Installation de Docker"
 
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
-                        docker-buildx-plugin docker-compose-plugin
+if ! command -v docker >/dev/null 2>&1; then
+  echo ">>> Installation de Docker..."
+  sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
+                         docker-buildx-plugin docker-compose-plugin
+else
+  echo ">>> Docker est déjà installé."
+fi
 
 # Ajout de l'utilisateur au groupe docker
 echo "********************************************************"
 echo ">>> Step [8] Ajout de l'utilisateur au groupe docker"
 
 sudo usermod -aG docker $USER
-
-# Reconnectez votre session pour activer le groupe docker
+newgrp docker <<EONG
+echo ">>> Groupe docker appliqué pour cette session"
+EONG
 
 echo "
 ********************************************************
@@ -72,26 +78,53 @@ echo "
 ********************************************************"
 
 echo ">>> Step [1] Vérifie si un swapfile existe déjà"
-if [ ! -f /swapfile ]; then
+if [ -f /swapfile ]; then
+  SIZE=$(sudo du -m /swapfile | cut -f1)
+  if [ "$SIZE" -lt 8192 ]; then
+    echo ">>> /swapfile existe mais est trop petit, recréation..."
+    sudo swapoff /swapfile
+    sudo rm /swapfile
+    CREATE_SWAP=1
+  else
+    echo ">>> /swapfile de taille correcte déjà présent."
+    CREATE_SWAP=0
+  fi
+else
+  CREATE_SWAP=1
+fi
+
+# Création du swapfile si nécessaire
+if [ $CREATE_SWAP -eq 1 ]; then
   echo ">>> Création du swapfile de 8G..."
-  sudo fallocate -l 8G /swapfile
+
+  if sudo fallocate -l 8G /swapfile 2>/dev/null; then
+    echo ">>> Swapfile créé avec fallocate (rapide)."
+  else
+    echo ">>> fallocate non disponible, utilisation de dd (plus long)..."
+    sudo dd if=/dev/zero of=/swapfile bs=1M count=8192 status=progress
+  fi
+
   sudo chmod 600 /swapfile
   sudo mkswap /swapfile
-else
-  echo ">>> /swapfile existe déjà, étape ignorée."
 fi
 
 echo "********************************************************"
 echo ">>> Step [2] Active le swapfile"
-sudo swapon /swapfile || echo ">>> Le swapfile est déjà actif."
+
+if [ $CREATE_SWAP -eq 1 ]; then
+    sudo swapon /swapfile
+    echo ">>> Swapfile activé."
+else
+    echo ">>> Swapfile déjà actif ou taille correcte, pas de modification."
+fi
 
 echo "********************************************************"
 echo ">>> Step [3] Vérifie si la ligne est déjà dans /etc/fstab, sinon l'ajoute"
 if ! grep -q '^/swapfile' /etc/fstab; then
-  echo '>>> /swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+  echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
   echo ">>> /etc/fstab mis à jour pour activer le swap au démarrage."
 else
-  echo ">>>Entrée déjà présente dans /etc/fstab."
+  echo ">>> Entrée déjà présente dans /etc/fstab."
 fi
 
 echo "********************************************************"
@@ -100,13 +133,19 @@ echo ">>> Vérification du swap activé :"
 swapon --show
 free -h
 
+
 echo "
 ********************************************************
-# Etape 3 : Création du projet
+# Etape 3 : Création du projet et git init
 ********************************************************"
 echo ">>> Step [1] création du répertoire ~/local-llm "
 mkdir -p ~/local-llm && cd ~/local-llm
-git init
+
+if [ ! -d ".git" ]; then
+  git init
+fi
+
+
 
 echo "********************************************************"
 echo ">>> Step [2] Création du fichier docker-compose.yml avec image OLLAMA et OPEN-WEBUI"
@@ -147,6 +186,11 @@ services:
       - "127.0.0.1:3000:8080"  # IHM dispo sur http://localhost:3000
     volumes:
       - openwebui:/app/backend/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 volumes:
   ollama:
@@ -160,11 +204,19 @@ echo ">>> Step [3] Démarrage des conteneurs Ollama et Open-WebUI"
 
 docker compose up -d
 
-# Pause pour laisser le temps aux services de démarrer
+echo "********************************************************"
+echo ">>> Step [4] Pause pour laisser le temps aux services de démarrer"
+
 sleep 10
 
+if ! docker ps | grep -q "open-webui"; then
+  echo "[ERREUR] Les conteneurs ne semblent pas avoir démarré correctement."
+  docker compose logs
+  exit 1
+fi
+
 echo "********************************************************"
-echo ">>> Step [4] Téléchargement du modèle Mistral instruct"
+echo ">>> Step [5] Téléchargement du modèle Mistral instruct"
 
 # Téléchargement du modèle Mistral instruct directement dans Ollama
 echo "Téléchargement du modèle mistral:instruct..."
